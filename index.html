@@ -950,8 +950,18 @@
 <div id="invoice-modal" class="modal-overlay">
   <div class="modal-box wide">
     <button onclick="closeModal('invoice-modal')" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
-    <h3 class="text-lg font-bold text-gray-800 mb-1" id="invoice-modal-title">Nova Nota Fiscal</h3>
-    <p class="text-sm text-gray-500 mb-5">Informe o número da NF e adicione os produtos. O custo de produção é preenchido automaticamente do catálogo.</p>
+    <div class="flex items-start justify-between mb-4">
+      <div>
+        <h3 class="text-lg font-bold text-gray-800 mb-1" id="invoice-modal-title">Nova Nota Fiscal</h3>
+        <p class="text-sm text-gray-500">Informe os dados da NF ou importe o XML da NF-e automaticamente.</p>
+      </div>
+      <div class="flex-shrink-0 ml-4">
+        <button class="btn btn-success" onclick="document.getElementById('xml-nfe-input').click()" style="gap:8px">
+          <i class="fas fa-file-code"></i> Importar XML NF-e
+        </button>
+        <input type="file" id="xml-nfe-input" accept=".xml,application/xml,text/xml" style="display:none" onchange="importNFXML(this)">
+      </div>
+    </div>
     <input type="hidden" id="inv-id">
     <div class="grid-3">
       <div class="form-group"><label class="form-label">Número da NF *</label><input id="inv-number" class="form-input" placeholder="000000"></div>
@@ -1823,6 +1833,62 @@ function addInvoiceItem() {
   renderInvoiceItems(); toast('Item adicionado!','info');
 }
 function removeInvItem(idx){invoiceItems.splice(idx,1);renderInvoiceItems();}
+
+function importNFXML(input) {
+  const file = input.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const xml = new DOMParser().parseFromString(e.target.result, 'text/xml');
+      const getText = (parent, tag) => { const el = parent.getElementsByTagName(tag); return el.length ? el[0].textContent.trim() : ''; };
+      const infNFe = xml.getElementsByTagName('infNFe')[0];
+      if(!infNFe) { toast('XML inválido: não é uma NF-e.', 'error'); return; }
+
+      // Cabeçalho
+      const nfNum    = getText(infNFe, 'nNF');
+      const dateRaw  = getText(infNFe, 'dhEmi') || getText(infNFe, 'dEmi');
+      const nfDate   = dateRaw ? dateRaw.substring(0,10) : todayStr();
+      const emitEl   = infNFe.getElementsByTagName('emit')[0];
+      const supplier = emitEl ? getText(emitEl,'xNome') : '';
+
+      if(nfNum)    document.getElementById('inv-number').value   = nfNum;
+      if(nfDate)   document.getElementById('inv-date').value     = nfDate;
+      if(supplier) document.getElementById('inv-supplier').value = supplier;
+
+      // Catálogo de produtos
+      const catalog = DB.get(K.products);
+
+      // Itens
+      const detEls = infNFe.getElementsByTagName('det');
+      let matched = 0, unmatched = 0;
+      for(let i = 0; i < detEls.length; i++) {
+        const prod = detEls[i].getElementsByTagName('prod')[0]; if(!prod) continue;
+        const code  = getText(prod,'cProd');
+        const name  = getText(prod,'xProd');
+        const qty   = parseFloat(getText(prod,'qCom'))   || 1;
+        const unit  = getText(prod,'uCom') || 'UN';
+        const price = parseFloat(getText(prod,'vUnCom')) || 0;
+
+        // Vincula ao catálogo: primeiro por código exato, depois por nome parcial
+        let cat = catalog.find(p => p.code && p.code.toLowerCase() === code.toLowerCase());
+        if(!cat) cat = catalog.find(p => p.name && name.length >= 6 && p.name.toLowerCase().includes(name.toLowerCase().substring(0,8)));
+        const prodCost = cat ? (+cat.productionCost || 0) : 0;
+        cat ? matched++ : unmatched++;
+
+        invoiceItems.push({ code: cat ? (cat.code||code) : code, name: cat ? cat.name : name, qty, unit, price, prodCost });
+      }
+
+      renderInvoiceItems();
+      const total = detEls.length;
+      if(total === 0) { toast('Nenhum item encontrado no XML.', 'error'); return; }
+      toast(`${total} item(ns) importado(s). ${matched} vinculado(s) ao catálogo${unmatched ? ` · ${unmatched} sem correspondência` : ''}.`, matched===total?'success':'info');
+    } catch(err) {
+      toast('Erro ao processar o XML. Verifique se é uma NF-e válida.', 'error');
+    }
+  };
+  reader.readAsText(file, 'UTF-8');
+  input.value = '';
+}
 
 function openInvoiceModal(id) {
   invoiceItems=[];
