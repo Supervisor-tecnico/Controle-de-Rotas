@@ -2027,8 +2027,10 @@ function importERPReport(input) {
         return;
       }
 
-      const newBlocks = nfBlocks.filter(b => !existingNFs.includes(b.number));
-      const dupBlocks = nfBlocks.filter(b =>  existingNFs.includes(b.number));
+      // Verifica duplicatas comparando nfNumber (schema novo) e number (schema legado)
+      const existingNFsNew = DB.get(K.invoices).map(n => String(n.nfNumber || n.number || ''));
+      const newBlocks = nfBlocks.filter(b => !existingNFsNew.includes(b.number));
+      const dupBlocks = nfBlocks.filter(b =>  existingNFsNew.includes(b.number));
       showERPPreviewModal(newBlocks, dupBlocks);
     } catch(err) {
       console.error('[ERP] Erro:', err);
@@ -2057,12 +2059,30 @@ function showERPPreviewModal(newBlocks, dupBlocks) {
       <td class="px-3 py-2 text-center text-sm ${b.unmatched ? 'text-yellow-600' : 'text-gray-400'}">${b.unmatched}</td>
     </tr>`).join('');
 
+  // Totais considerando todas as NFs (novas + duplicatas para substituição)
+  const allItems    = nfBlocks.reduce((s, b) => s + b.items.length, 0);
+  const allMatched  = nfBlocks.reduce((s, b) => s + b.matched, 0);
+  const allUnmatched= nfBlocks.reduce((s, b) => s + b.unmatched, 0);
+
+  const tableRows = (blocks) => blocks.map(b => `
+    <tr>
+      <td class="px-3 py-2 font-mono text-sm">${b.number}</td>
+      <td class="px-3 py-2 text-sm">${b.date}</td>
+      <td class="px-3 py-2 text-sm">${b.customer || '—'}</td>
+      <td class="px-3 py-2 text-center text-sm">${b.items.length}</td>
+      <td class="px-3 py-2 text-center text-sm text-green-600">${b.matched}</td>
+      <td class="px-3 py-2 text-center text-sm ${b.unmatched ? 'text-yellow-600' : 'text-gray-400'}">${b.unmatched}</td>
+    </tr>`).join('');
+
+  const allBlocks = [...newBlocks, ...dupBlocks];
+  rowsHTML = tableRows(allBlocks);
+
   let dupHTML = dupBlocks.length ? `
     <div class="mt-3 p-3 rounded" style="background:var(--warning-bg,#fffbeb);border:1px solid #fcd34d">
-      <p class="text-sm text-yellow-700"><i class="fas fa-exclamation-triangle mr-1"></i>
-        <strong>${dupBlocks.length}</strong> NF(s) já existem e serão ignoradas:
-        ${dupBlocks.map(b => `<span class="font-mono">#${b.number}</span>`).join(', ')}
+      <p class="text-sm text-yellow-700 mb-1"><i class="fas fa-exclamation-triangle mr-1"></i>
+        <strong>${dupBlocks.length}</strong> NF(s) já existem no sistema (destacadas acima).
       </p>
+      <p class="text-sm text-yellow-600">Clique em <strong>Substituir todas</strong> para apagar as versões antigas e reimportar com os dados corretos.</p>
     </div>` : '';
 
   const modal = document.createElement('div');
@@ -2074,10 +2094,9 @@ function showERPPreviewModal(newBlocks, dupBlocks) {
         <i class="fas fa-file-excel text-green-600 text-2xl"></i>
         <div>
           <h3 class="font-bold text-lg">Importar Relatório ERP</h3>
-          <p class="text-sm text-gray-500">${total} NF(s) encontrada(s) · ${totalItems} itens · ${totalMatched} vinculados ao catálogo${totalUnmatched ? ` · ${totalUnmatched} sem correspondência` : ''}</p>
+          <p class="text-sm text-gray-500">${total} NF(s) encontrada(s) · ${allItems} itens · ${allMatched} vinculados ao catálogo${allUnmatched ? ` · ${allUnmatched} sem correspondência` : ''}</p>
         </div>
       </div>
-      ${newBlocks.length ? `
       <div style="overflow-x:auto">
         <table class="data-table w-full mb-3">
           <thead><tr>
@@ -2090,21 +2109,36 @@ function showERPPreviewModal(newBlocks, dupBlocks) {
           </tr></thead>
           <tbody>${rowsHTML}</tbody>
         </table>
-      </div>` : `<p class="text-center text-gray-500 py-4">Todas as NFs do relatório já foram importadas.</p>`}
+      </div>
       ${dupHTML}
-      <div class="flex gap-3 justify-end mt-4">
+      <div class="flex gap-3 justify-end mt-4 flex-wrap">
         <button class="btn btn-outline" onclick="document.getElementById('erp-preview-modal').remove()">Cancelar</button>
-        ${newBlocks.length ? `<button class="btn btn-primary" onclick="confirmERPImport()"><i class="fas fa-check mr-1"></i> Importar ${newBlocks.length} NF(s)</button>` : ''}
+        ${dupBlocks.length ? `<button class="btn" style="background:#f59e0b;color:#fff" onclick="confirmERPImport(true)"><i class="fas fa-sync-alt mr-1"></i> Substituir todas (${total})</button>` : ''}
+        ${newBlocks.length ? `<button class="btn btn-primary" onclick="confirmERPImport(false)"><i class="fas fa-check mr-1"></i> Importar novas (${newBlocks.length})</button>` : ''}
       </div>
     </div>`;
 
   document.body.appendChild(modal);
-  window._erpPendingBlocks = newBlocks;
+  window._erpPendingBlocks = { newBlocks, dupBlocks };
 }
 
-function confirmERPImport() {
-  const blocks = window._erpPendingBlocks || [];
+function confirmERPImport(replaceExisting) {
+  const pending = window._erpPendingBlocks || {};
+  const newBlocks = pending.newBlocks || [];
+  const dupBlocks = pending.dupBlocks || [];
+  const blocks = replaceExisting ? [...newBlocks, ...dupBlocks] : newBlocks;
   if(!blocks.length) return;
+
+  if(replaceExisting && dupBlocks.length) {
+    // Remove registros antigos com mesmo número (nfNumber ou number legado)
+    const dupNumbers = dupBlocks.map(b => b.number);
+    let allInvs = DB.get(K.invoices).filter(inv => {
+      const n = String(inv.nfNumber || inv.number || '');
+      return !dupNumbers.includes(n);
+    });
+    localStorage.setItem(K.invoices, JSON.stringify(allInvs));
+  }
+
   let saved = 0;
   blocks.forEach(b => {
     const inv = {
