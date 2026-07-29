@@ -1952,11 +1952,17 @@ function importERPReport(input) {
         if(nfCellIdx >= 0) {
           if(current && current.items.length) nfBlocks.push(current);
           colOffset = nfCellIdx;
-          const nfMatch  = nfCellVal.match(/NF:\s*(\d+)/i);
+          const nfMatch   = nfCellVal.match(/NF:\s*(\d+)/i);
           const dateMatch = nfCellVal.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          const nfDate   = dateMatch ? `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}` : todayStr();
+          const nfDate    = dateMatch ? `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}` : todayStr();
           current = { number: nfMatch[1], date: nfDate, customer: '', items: [], matched: 0, unmatched: 0 };
           inProducts = false;
+          // Cliente pode estar na mesma linha do cabeçalho NF (colunas à direita)
+          for(let j = 0; j < row.length; j++) {
+            const v = String(row[j]||'').trim();
+            const cm = v.match(/Cliente:\s*\d+\s*-\s*(.+?)(?:\s*-\s*CPF|\s*-\s*CNPJ|$)/i);
+            if(cm) { current.customer = cm[1].trim(); break; }
+          }
           continue;
         }
 
@@ -2059,102 +2065,128 @@ function showERPPreviewModal(newBlocks, dupBlocks) {
       <td class="px-3 py-2 text-center text-sm ${b.unmatched ? 'text-yellow-600' : 'text-gray-400'}">${b.unmatched}</td>
     </tr>`).join('');
 
-  // Totais considerando todas as NFs (novas + duplicatas para substituição)
-  const allBlocks0  = [...newBlocks, ...dupBlocks];
-  const allItems    = allBlocks0.reduce((s, b) => s + b.items.length, 0);
-  const allMatched  = allBlocks0.reduce((s, b) => s + b.matched, 0);
-  const allUnmatched= allBlocks0.reduce((s, b) => s + b.unmatched, 0);
+  // Combina todos os blocos com flag isDup
+  const allBlocks = [
+    ...newBlocks.map(b => ({...b, isDup: false})),
+    ...dupBlocks.map(b => ({...b, isDup: true}))
+  ];
 
-  const tableRows = (blocks) => blocks.map(b => `
-    <tr>
-      <td class="px-3 py-2 font-mono text-sm">${b.number}</td>
-      <td class="px-3 py-2 text-sm">${b.date}</td>
-      <td class="px-3 py-2 text-sm">${b.customer || '—'}</td>
-      <td class="px-3 py-2 text-center text-sm">${b.items.length}</td>
-      <td class="px-3 py-2 text-center text-sm text-green-600">${b.matched}</td>
-      <td class="px-3 py-2 text-center text-sm ${b.unmatched ? 'text-yellow-600' : 'text-gray-400'}">${b.unmatched}</td>
-    </tr>`).join('');
+  window._erpPendingBlocks = allBlocks; // array plano com flag isDup
 
-  const allBlocks = [...newBlocks, ...dupBlocks];
-  rowsHTML = tableRows(allBlocks);
+  function buildERPTable() {
+    const blocks = window._erpPendingBlocks;
+    const totalItems    = blocks.reduce((s,b) => s + b.items.length, 0);
+    const totalMatched  = blocks.reduce((s,b) => s + b.matched, 0);
+    const totalUnmatched= blocks.reduce((s,b) => s + b.unmatched, 0);
+    const totalValue    = blocks.reduce((s,b) => s + b.items.reduce((ss,it) => ss + (it.totalLiq||0), 0), 0);
+    const hasDup = blocks.some(b => b.isDup);
 
-  let dupHTML = dupBlocks.length ? `
-    <div class="mt-3 p-3 rounded" style="background:var(--warning-bg,#fffbeb);border:1px solid #fcd34d">
-      <p class="text-sm text-yellow-700 mb-1"><i class="fas fa-exclamation-triangle mr-1"></i>
-        <strong>${dupBlocks.length}</strong> NF(s) já existem no sistema (destacadas acima).
-      </p>
-      <p class="text-sm text-yellow-600">Clique em <strong>Substituir todas</strong> para apagar as versões antigas e reimportar com os dados corretos.</p>
-    </div>` : '';
+    document.getElementById('erp-summary').textContent =
+      `${blocks.length} NF(s) selecionada(s) · ${totalItems} itens · ${totalMatched} vinculados · R$ ${brl(totalValue)}`;
+
+    document.getElementById('erp-tbody').innerHTML = blocks.map((b, idx) => {
+      const valor = b.items.reduce((s, it) => s + (it.totalLiq||0), 0);
+      const rowBg = b.isDup ? 'background:rgba(251,191,36,.08)' : '';
+      return `<tr style="${rowBg}">
+        <td class="px-2 py-2 text-center">
+          <button onclick="removeERPBlock(${idx})" title="Retirar esta NF" style="background:none;border:none;cursor:pointer;color:#ef4444;font-size:1rem"><i class="fas fa-times-circle"></i></button>
+        </td>
+        <td class="px-3 py-2 font-mono text-sm">${b.number}${b.isDup ? ' <span title="Já existe no sistema" style="color:#f59e0b;font-size:.7rem">●</span>' : ''}</td>
+        <td class="px-3 py-2 text-sm">${b.date}</td>
+        <td class="px-3 py-2 text-sm" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${b.customer||''}">${b.customer || '—'}</td>
+        <td class="px-3 py-2 text-center text-sm">${b.items.length}</td>
+        <td class="px-3 py-2 text-right text-sm font-mono">R$ ${brl(valor)}</td>
+        <td class="px-3 py-2 text-center text-sm text-green-600">${b.matched}</td>
+        <td class="px-3 py-2 text-center text-sm ${b.unmatched ? 'text-yellow-600' : 'text-gray-400'}">${b.unmatched || '—'}</td>
+      </tr>`;
+    }).join('');
+
+    const btnArea = document.getElementById('erp-btn-area');
+    btnArea.innerHTML = `
+      <button class="btn btn-outline" onclick="document.getElementById('erp-preview-modal').remove()">Cancelar</button>
+      ${hasDup ? `<button class="btn" style="background:#f59e0b;color:#fff" onclick="confirmERPImport()"><i class="fas fa-sync-alt mr-1"></i> Substituir existentes e importar (${blocks.length})</button>` : ''}
+      <button class="btn btn-primary" onclick="confirmERPImport()"><i class="fas fa-check mr-1"></i> Importar selecionadas (${blocks.length})</button>
+    `;
+  }
 
   const modal = document.createElement('div');
   modal.id = 'erp-preview-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
   modal.innerHTML = `
-    <div class="card" style="max-width:760px;width:100%;max-height:90vh;overflow:auto">
-      <div class="flex items-center gap-3 mb-4">
+    <div class="card" style="max-width:860px;width:100%;max-height:90vh;display:flex;flex-direction:column">
+      <div class="flex items-center gap-3 mb-3">
         <i class="fas fa-file-excel text-green-600 text-2xl"></i>
         <div>
           <h3 class="font-bold text-lg">Importar Relatório ERP</h3>
-          <p class="text-sm text-gray-500">${total} NF(s) encontrada(s) · ${allItems} itens · ${allMatched} vinculados ao catálogo${allUnmatched ? ` · ${allUnmatched} sem correspondência` : ''}</p>
+          <p class="text-sm text-gray-500" id="erp-summary"></p>
         </div>
       </div>
-      <div style="overflow-x:auto">
-        <table class="data-table w-full mb-3">
+      ${dupBlocks.length ? `<div class="mb-3 p-2 rounded text-sm" style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e">
+        <i class="fas fa-exclamation-triangle mr-1"></i>
+        NFs com <span style="color:#f59e0b">●</span> já existem. Retire-as ou clique em <strong>Substituir</strong> para atualizar.
+      </div>` : ''}
+      <div style="overflow:auto;flex:1">
+        <table class="data-table w-full">
           <thead><tr>
+            <th class="px-2 py-2 text-center text-sm" style="width:36px"></th>
             <th class="px-3 py-2 text-left text-sm">NF</th>
             <th class="px-3 py-2 text-left text-sm">Data</th>
             <th class="px-3 py-2 text-left text-sm">Cliente</th>
             <th class="px-3 py-2 text-center text-sm">Itens</th>
+            <th class="px-3 py-2 text-right text-sm">Valor Líq.</th>
             <th class="px-3 py-2 text-center text-sm">Vinculados</th>
             <th class="px-3 py-2 text-center text-sm">Sem catálogo</th>
           </tr></thead>
-          <tbody>${rowsHTML}</tbody>
+          <tbody id="erp-tbody"></tbody>
         </table>
       </div>
-      ${dupHTML}
-      <div class="flex gap-3 justify-end mt-4 flex-wrap">
-        <button class="btn btn-outline" onclick="document.getElementById('erp-preview-modal').remove()">Cancelar</button>
-        ${dupBlocks.length ? `<button class="btn" style="background:#f59e0b;color:#fff" onclick="confirmERPImport(true)"><i class="fas fa-sync-alt mr-1"></i> Substituir todas (${total})</button>` : ''}
-        ${newBlocks.length ? `<button class="btn btn-primary" onclick="confirmERPImport(false)"><i class="fas fa-check mr-1"></i> Importar novas (${newBlocks.length})</button>` : ''}
-      </div>
+      <div class="flex gap-3 justify-end mt-4 flex-wrap" id="erp-btn-area"></div>
     </div>`;
 
   document.body.appendChild(modal);
-  window._erpPendingBlocks = { newBlocks, dupBlocks };
+  buildERPTable();
+  window._buildERPTable = buildERPTable;
 }
 
-function confirmERPImport(replaceExisting) {
-  const pending = window._erpPendingBlocks || {};
-  const newBlocks = pending.newBlocks || [];
-  const dupBlocks = pending.dupBlocks || [];
-  const blocks = replaceExisting ? [...newBlocks, ...dupBlocks] : newBlocks;
+function removeERPBlock(idx) {
+  window._erpPendingBlocks.splice(idx, 1);
+  if(!window._erpPendingBlocks.length) {
+    document.getElementById('erp-preview-modal').remove();
+    window._erpPendingBlocks = null;
+    return;
+  }
+  window._buildERPTable && window._buildERPTable();
+}
+
+function confirmERPImport() {
+  const blocks = window._erpPendingBlocks || [];
   if(!blocks.length) return;
 
-  if(replaceExisting && dupBlocks.length) {
-    // Remove registros antigos com mesmo número (nfNumber ou number legado)
-    const dupNumbers = dupBlocks.map(b => b.number);
-    let allInvs = DB.get(K.invoices).filter(inv => {
+  // Remove registros antigos que sejam duplicatas (nfNumber ou legado number)
+  const dupNumbers = blocks.filter(b => b.isDup).map(b => b.number);
+  if(dupNumbers.length) {
+    const cleaned = DB.get(K.invoices).filter(inv => {
       const n = String(inv.nfNumber || inv.number || '');
       return !dupNumbers.includes(n);
     });
-    localStorage.setItem(K.invoices, JSON.stringify(allInvs));
+    localStorage.setItem(K.invoices, JSON.stringify(cleaned));
   }
 
   let saved = 0;
   blocks.forEach(b => {
-    const inv = {
+    DB.save(K.invoices, {
       id:       uid(),
       nfNumber: b.number,
       nfDate:   b.date,
       supplier: b.customer,
       items:    b.items,
       routeId:  null
-    };
-    DB.save(K.invoices, inv);
+    });
     saved++;
   });
   document.getElementById('erp-preview-modal').remove();
   window._erpPendingBlocks = null;
+  window._buildERPTable = null;
   renderInvoices();
   toast(`${saved} NF(s) importada(s) com sucesso!`, 'success');
 }
