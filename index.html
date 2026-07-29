@@ -123,6 +123,12 @@
     <button class="btn btn-primary w-full justify-center" onclick="createFirstAdmin()">
       <i class="fas fa-user-shield"></i> Criar Administrador
     </button>
+    <div class="relative my-5"><div style="border-top:1px solid #e2e8f0"></div><span class="absolute left-1/2 -translate-x-1/2 -top-3 bg-white px-3 text-xs text-gray-400">ou</span></div>
+    <button class="btn btn-outline w-full justify-center" onclick="document.getElementById('setup-import-file').click()">
+      <i class="fas fa-upload"></i> Restaurar Backup Existente
+    </button>
+    <input type="file" id="setup-import-file" accept=".json" style="display:none" onchange="importBackupFromSetup(this)">
+    <p class="text-center text-xs text-gray-400 mt-2">Já tem um backup? Importe e entre com seus dados existentes.</p>
   </div>
 </div>
 
@@ -2028,6 +2034,23 @@ function saveUser() {
 function deleteUser(id){
   confirmAction('Excluir usuário?','Esta ação não pode ser desfeita.',()=>{DB.del(K.users,id);renderUsers();toast('Usuário excluído.','info');});
 }
+function importBackupFromSetup(input) {
+  const file = input.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if(!data._app) { alert('Arquivo inválido — não é um backup do Controle de Rotas.'); return; }
+      const keys = ['rc_users','rc_vehicles','rc_drivers','rc_routes','rc_invoices','rc_products','rc_customers','rc_templates','rc_activities'];
+      keys.forEach(k => { if(data[k]) localStorage.setItem(k, data[k]); });
+      alert('Backup restaurado com sucesso! Faça login com suas credenciais.');
+      location.reload();
+    } catch { alert('Erro ao ler o arquivo de backup. Verifique se o arquivo está correto.'); }
+  };
+  reader.readAsText(file);
+  input.value = '';
+}
+
 function exportBackup() {
   const keys = ['rc_users','rc_vehicles','rc_drivers','rc_routes','rc_invoices','rc_products','rc_customers','rc_templates','rc_activities'];
   const data = { _version: 1, _exported: new Date().toISOString(), _app: 'Controle de Rotas' };
