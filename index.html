@@ -201,6 +201,31 @@
   </div>
 </div>
 
+<!-- CHANGE PASSWORD SCREEN -->
+<div id="change-password-screen" class="min-h-screen flex items-center justify-center p-4" style="display:none!important;background:linear-gradient(135deg,#0f2341 0%,#1e3a5f 60%,#1d4ed8 100%)">
+  <div class="card w-full max-w-sm" style="box-shadow:0 25px 60px rgba(0,0,0,.35)">
+    <div class="text-center mb-6">
+      <div class="inline-flex items-center justify-center w-14 h-14 rounded-full mb-3" style="background:#1e3a5f">
+        <i class="fas fa-key text-xl text-white"></i>
+      </div>
+      <h1 class="text-xl font-bold text-gray-800">Redefinir Senha</h1>
+      <p class="text-gray-500 text-sm mt-1">Por segurança, crie uma nova senha para continuar.</p>
+    </div>
+    <div id="cp-alert"></div>
+    <div class="form-group">
+      <label class="form-label">Nova senha</label>
+      <input id="cp-new-pass" type="password" class="form-input" placeholder="Mínimo 6 caracteres" onkeydown="if(event.key==='Enter')saveNewPassword()">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Confirmar nova senha</label>
+      <input id="cp-confirm-pass" type="password" class="form-input" placeholder="Repita a nova senha" onkeydown="if(event.key==='Enter')saveNewPassword()">
+    </div>
+    <button class="btn btn-primary w-full justify-center" onclick="saveNewPassword()">
+      <i class="fas fa-check"></i> Salvar Nova Senha
+    </button>
+  </div>
+</div>
+
 <!-- MAIN APP -->
 <div id="sidebar-overlay" onclick="closeSidebar()"></div>
 
@@ -1020,6 +1045,12 @@
     <div class="form-group"><label class="form-label">Status</label>
       <select id="u-active" class="form-input"><option value="1">Ativo</option><option value="0">Inativo</option></select>
     </div>
+    <div class="form-group">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" id="u-force-pw" style="width:16px;height:16px;accent-color:#1e3a5f">
+        <span class="form-label" style="margin:0">Solicitar troca de senha no próximo login</span>
+      </label>
+    </div>
     <div class="flex gap-3 justify-end mt-4">
       <button class="btn btn-secondary" onclick="closeModal('user-modal')">Cancelar</button>
       <button class="btn btn-primary" onclick="saveUser()"><i class="fas fa-save"></i> Salvar</button>
@@ -1209,7 +1240,9 @@ function doLogin() {
   if(!user||!checkHash(pass,user.passwordHash)) {
     alert.innerHTML='<div class="alert alert-error"><i class="fas fa-circle-exclamation mr-2"></i>E-mail ou senha inválidos.</div>'; return;
   }
-  currentUser=user; DB.setObj(K.session,user); showApp();
+  currentUser=user; DB.setObj(K.session,user);
+  if(user.mustChangePassword) { showScreen('change-password'); return; }
+  showApp();
 }
 function doLogout() { currentUser=null; DB.setObj(K.session,null); showScreen('login'); }
 function createFirstAdmin() {
@@ -1237,12 +1270,30 @@ function closeSidebar() {
 
 // ---- SCREENS ----
 function showScreen(s) {
-  ['setup-screen','login-screen','register-screen','main-app'].forEach(id=>{
+  ['setup-screen','login-screen','register-screen','change-password-screen','main-app'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.style.display='none';
   });
   if(s==='setup') document.getElementById('setup-screen').style.display='flex';
   else if(s==='login') { document.getElementById('login-screen').style.display='flex'; document.getElementById('login-alert').innerHTML=''; }
   else if(s==='register') { document.getElementById('register-screen').style.display='flex'; document.getElementById('register-alert').innerHTML=''; }
+  else if(s==='change-password') { document.getElementById('change-password-screen').style.display='flex'; document.getElementById('cp-alert').innerHTML=''; }
+}
+
+function saveNewPassword() {
+  const pass=document.getElementById('cp-new-pass').value;
+  const pass2=document.getElementById('cp-confirm-pass').value;
+  const alertEl=document.getElementById('cp-alert');
+  if(!pass||pass.length<6) { alertEl.innerHTML='<div class="alert alert-error">Senha mínima: 6 caracteres.</div>'; return; }
+  if(pass!==pass2) { alertEl.innerHTML='<div class="alert alert-error">As senhas não coincidem.</div>'; return; }
+  const users=DB.get(K.users);
+  const u=users.find(x=>x.id===currentUser.id);
+  if(!u) return;
+  u.passwordHash=simpleHash(pass);
+  u.mustChangePassword=false;
+  DB.set(K.users,users);
+  currentUser=u; DB.setObj(K.session,u);
+  alertEl.innerHTML='<div class="alert alert-success"><i class="fas fa-check-circle mr-2"></i>Senha alterada com sucesso!</div>';
+  setTimeout(()=>showApp(), 1000);
 }
 
 function doRegister() {
@@ -2006,6 +2057,7 @@ function openUserModal(id) {
   document.getElementById('u-email').value=u.email||'';
   document.getElementById('u-role').value=u.role||'financeiro';
   document.getElementById('u-active').value=u.active!==false?'1':'0';
+  document.getElementById('u-force-pw').checked=u.mustChangePassword===true;
   document.getElementById('u-pass').value='';
   document.getElementById('u-pass2').value='';
   document.getElementById('u-pass-group').querySelector('label').textContent=id?'Nova senha (deixe em branco para não alterar)':'Senha *';
@@ -2026,7 +2078,7 @@ function saveUser() {
   if(conflict){toast('Este e-mail já está em uso','error');return;}
   const id=existingId||uid();
   const existing=DB.find(K.users,id)||{};
-  const user={...existing,id,name,email,role,active:document.getElementById('u-active').value==='1'};
+  const user={...existing,id,name,email,role,active:document.getElementById('u-active').value==='1',mustChangePassword:document.getElementById('u-force-pw').checked};
   if(pass) user.passwordHash=simpleHash(pass);
   DB.save(K.users,user);
   if(user.id===currentUser.id){currentUser=user;DB.setObj(K.session,user);document.getElementById('sidebar-name').textContent=user.name;}
