@@ -1911,11 +1911,21 @@ function importERPReport(input) {
   reader.onload = function(e) {
     try {
       const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
-      const ws = wb.Sheets[wb.SheetNames[0]];
+
+      // Usa a aba com mais linhas (os dados das NFs podem não estar na aba 0)
+      let ws = wb.Sheets[wb.SheetNames[0]];
+      let maxRows = 0;
+      wb.SheetNames.forEach(name => {
+        const s = wb.Sheets[name];
+        const r = XLSX.utils.sheet_to_json(s, {header:1, defval:''});
+        console.log(`[ERP] Aba "${name}": ${r.length} linhas`);
+        if(r.length > maxRows) { maxRows = r.length; ws = s; }
+      });
+
       const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
 
-      // Debug: log primeiras 30 linhas para diagnóstico
-      console.log('[ERP] Total de linhas:', rows.length);
+      // Debug: log primeiras 40 linhas para diagnóstico
+      console.log('[ERP] Aba selecionada, total de linhas:', rows.length);
       rows.slice(0, 40).forEach((r, i) => {
         const nonEmpty = r.map((c,j) => c !== '' ? `[${j}]="${c}"` : null).filter(Boolean);
         if(nonEmpty.length) console.log(`[ERP] linha ${i}: ${nonEmpty.join(' | ')}`);
