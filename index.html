@@ -2002,16 +2002,16 @@ function importERPReport(input) {
         const code = dashIdx > -1 ? c0.substring(0, dashIdx).trim() : c0.split(/\s+/)[0];
         const name = dashIdx > -1 ? c0.substring(dashIdx + 3).trim() : c0;
 
-        // Colunas de valores (relativas ao offset):
-        // col+1=QTDE/PC, col+2=QTDE/KG, col+3=VLR MÉDIO/KG(×1000), col+4=TOTAL BRT(×1/10000), col+5=TOTAL LIQ(×1/10000)
-        const qtyKg      = parseBRNumber(row[colOffset + 2]);
-        const priceRaw   = parseBRNumber(row[colOffset + 3]);
-        const totalLiqRaw= parseBRNumber(row[colOffset + 5]);
-        // ERP armazena VLR MÉDIO/KG ×1000 e TOTAL ÷10000 (ex: 2027 = R$2,027/kg; 1,8243 × 10000 = R$18.243)
-        const unitPrice  = priceRaw / 1000;
-        const totalLiq   = totalLiqRaw * 10000;
+        // SheetJS lê QTDE e VLR ×100 e TOTAL ÷1000 em relação ao valor real do ERP
+        // Ex real: QTDE=90, VLR=20,27, TOTAL=1824,30 → SheetJS lê: 9000, 2027, 1,8243
+        const qtyRaw      = parseBRNumber(row[colOffset + 2]);
+        const priceRaw    = parseBRNumber(row[colOffset + 3]);
+        const totalLiqRaw = parseBRNumber(row[colOffset + 5]);
+        const qtyKg       = qtyRaw   / 100;    // corrige fator ×100 do SheetJS
+        const unitPrice   = priceRaw / 100;    // corrige fator ×100 do SheetJS
+        const totalLiq    = totalLiqRaw * 1000; // corrige fator ÷1000 do SheetJS
 
-        if(qtyKg === 0 && priceRaw === 0) continue;
+        if(qtyKg === 0 && unitPrice === 0) continue;
 
         let cat = catalog.find(p => p.code && p.code.toUpperCase() === code.toUpperCase());
         if(!cat) cat = catalog.find(p => p.name && name.length >= 6 && p.name.toLowerCase().includes(name.toLowerCase().substring(0,8)));
