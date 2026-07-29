@@ -2060,9 +2060,10 @@ function showERPPreviewModal(newBlocks, dupBlocks) {
     </tr>`).join('');
 
   // Totais considerando todas as NFs (novas + duplicatas para substituição)
-  const allItems    = nfBlocks.reduce((s, b) => s + b.items.length, 0);
-  const allMatched  = nfBlocks.reduce((s, b) => s + b.matched, 0);
-  const allUnmatched= nfBlocks.reduce((s, b) => s + b.unmatched, 0);
+  const allBlocks0  = [...newBlocks, ...dupBlocks];
+  const allItems    = allBlocks0.reduce((s, b) => s + b.items.length, 0);
+  const allMatched  = allBlocks0.reduce((s, b) => s + b.matched, 0);
+  const allUnmatched= allBlocks0.reduce((s, b) => s + b.unmatched, 0);
 
   const tableRows = (blocks) => blocks.map(b => `
     <tr>
