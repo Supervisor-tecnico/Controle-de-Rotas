@@ -2003,26 +2003,29 @@ function importERPReport(input) {
         const name = dashIdx > -1 ? c0.substring(dashIdx + 3).trim() : c0;
 
         // Colunas de valores (relativas ao offset):
-        // col+1=QTDE/PC, col+2=QTDE/KG, col+3=VLR MÉDIO/KG, col+4=TOTAL BRT, col+5=TOTAL LIQ
-        const qtyKg   = parseBRNumber(row[colOffset + 2]);
-        const price    = parseBRNumber(row[colOffset + 3]);
-        const totalLiq = parseBRNumber(row[colOffset + 5]);
+        // col+1=QTDE/PC, col+2=QTDE/KG, col+3=VLR MÉDIO/KG(×1000), col+4=TOTAL BRT(×1/10000), col+5=TOTAL LIQ(×1/10000)
+        const qtyKg      = parseBRNumber(row[colOffset + 2]);
+        const priceRaw   = parseBRNumber(row[colOffset + 3]);
+        const totalLiqRaw= parseBRNumber(row[colOffset + 5]);
+        // ERP armazena VLR MÉDIO/KG ×1000 e TOTAL ÷10000 (ex: 2027 = R$2,027/kg; 1,8243 × 10000 = R$18.243)
+        const unitPrice  = priceRaw / 1000;
+        const totalLiq   = totalLiqRaw * 10000;
 
-        if(qtyKg === 0 && price === 0) continue;
+        if(qtyKg === 0 && priceRaw === 0) continue;
 
         let cat = catalog.find(p => p.code && p.code.toUpperCase() === code.toUpperCase());
         if(!cat) cat = catalog.find(p => p.name && name.length >= 6 && p.name.toLowerCase().includes(name.toLowerCase().substring(0,8)));
-        const prodCost = cat ? (+cat.productionCost || 0) : 0;
+        const productionCost = cat ? (+cat.productionCost || 0) : 0;
         cat ? current.matched++ : current.unmatched++;
 
         current.items.push({
-          code:     cat ? (cat.code || code) : code,
-          name:     cat ? cat.name : name,
-          qty:      qtyKg || 1,
-          unit:     'KG',
-          price:    price,
-          prodCost: prodCost,
-          totalLiq: totalLiq
+          code:           cat ? (cat.code || code) : code,
+          name:           cat ? cat.name : name,
+          qty:            qtyKg || 1,
+          unit:           'KG',
+          unitPrice:      unitPrice,
+          productionCost: productionCost,
+          totalLiq:       totalLiq
         });
       }
       if(current && current.items.length) nfBlocks.push(current);
