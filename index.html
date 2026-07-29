@@ -2108,13 +2108,12 @@ function confirmERPImport() {
   let saved = 0;
   blocks.forEach(b => {
     const inv = {
-      id:       Date.now() + '_' + b.number + '_' + Math.random().toString(36).slice(2,6),
-      number:   b.number,
-      date:     b.date,
+      id:       uid(),
+      nfNumber: b.number,
+      nfDate:   b.date,
       supplier: b.customer,
       items:    b.items,
-      status:   'pendente',
-      createdAt: new Date().toISOString()
+      routeId:  null
     };
     DB.save(K.invoices, inv);
     saved++;
