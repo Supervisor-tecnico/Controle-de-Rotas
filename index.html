@@ -562,9 +562,15 @@
 
       <!-- INVOICES (NF) -->
       <div id="view-invoices" class="view">
-        <div class="flex justify-between items-center mb-6">
+        <div class="flex justify-between items-center mb-6 flex-wrap gap-3">
           <div><h2 class="section-title">Notas Fiscais</h2><p class="section-sub">Vinculação de NFs com custo de produção dos produtos</p></div>
-          <button class="btn btn-primary" onclick="openInvoiceModal()"><i class="fas fa-plus"></i> Nova NF</button>
+          <div class="flex gap-2 flex-wrap">
+            <button class="btn btn-outline" onclick="document.getElementById('erp-report-input').click()" title="Importar relatório ERP com múltiplas NFs">
+              <i class="fas fa-file-excel"></i> Importar Relatório ERP
+            </button>
+            <input type="file" id="erp-report-input" accept=".xls,.xlsx" style="display:none" onchange="importERPReport(this)">
+            <button class="btn btn-primary" onclick="openInvoiceModal()"><i class="fas fa-plus"></i> Nova NF</button>
+          </div>
         </div>
         <div class="card mb-4">
           <div class="flex gap-3 flex-wrap">
@@ -1888,6 +1894,204 @@ function importNFXML(input) {
   };
   reader.readAsText(file, 'UTF-8');
   input.value = '';
+}
+
+// ── Importação em lote do Relatório ERP ──────────────────────────────────────
+function parseBRNumber(s) {
+  if(s === null || s === undefined || s === '') return 0;
+  const str = String(s).trim().replace(/\./g,'').replace(',','.');
+  const n = parseFloat(str);
+  return isNaN(n) ? 0 : n;
+}
+
+function importERPReport(input) {
+  const file = input.files[0]; if(!file) return;
+  input.value = '';
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+      const catalog = DB.get(K.products);
+      const existingNFs = DB.get(K.invoices).map(n => String(n.number));
+
+      const nfBlocks = [];
+      let current = null;
+      let inProducts = false;
+
+      for(let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const c0 = String(row[0]||'').trim();
+
+        // Detecta início de bloco NF
+        const nfMatch = c0.match(/NF:\s*(\d+)/);
+        if(nfMatch) {
+          if(current) nfBlocks.push(current);
+          const dateMatch = c0.match(/miss[aã]o:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+          const nfDate = dateMatch ? `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}` : todayStr();
+          current = { number: nfMatch[1], date: nfDate, customer: '', items: [], matched: 0, unmatched: 0 };
+          inProducts = false;
+          continue;
+        }
+
+        if(!current) continue;
+
+        // Detecta linha de cliente
+        const clienteMatch = c0.match(/Cliente:\s*\d+\s*-\s*(.+?)\s*(?:-\s*CPF|$)/i);
+        if(clienteMatch) {
+          current.customer = clienteMatch[1].trim();
+          continue;
+        }
+
+        // Detecta cabeçalho de produto (linha "PRODUTO | QTDE/PC | ...")
+        if(/PRODUTO/i.test(c0) && /QTDE/i.test(String(row[1]||''))) {
+          inProducts = true;
+          continue;
+        }
+
+        if(!inProducts) continue;
+
+        // Linha de subtotal: célula 0 vazia e col[2] numérica
+        if(!c0 && parseBRNumber(row[2]) > 0) {
+          inProducts = false;
+          continue;
+        }
+
+        // Linha de produto: código começa com letras + hífen + dígitos (ex: QT-1234 ou QM-1234)
+        if(!/^[A-Z]{1,3}-\d+/i.test(c0)) continue;
+
+        const dashIdx = c0.indexOf(' - ');
+        const code = dashIdx > -1 ? c0.substring(0, dashIdx).trim() : c0.split(/\s/)[0];
+        const name = dashIdx > -1 ? c0.substring(dashIdx + 3).trim() : c0;
+
+        const qtyKg  = parseBRNumber(row[2]); // QTDE/KG
+        const price  = parseBRNumber(row[3]); // VLR MÉDIO/KG
+        const totalLiq = parseBRNumber(row[5]); // TOTAL LIQ.
+
+        if(qtyKg === 0 && price === 0) continue;
+
+        // Vincula ao catálogo
+        let cat = catalog.find(p => p.code && p.code.toUpperCase() === code.toUpperCase());
+        if(!cat) cat = catalog.find(p => p.name && name.length >= 6 && p.name.toLowerCase().includes(name.toLowerCase().substring(0,8)));
+        const prodCost = cat ? (+cat.productionCost || 0) : 0;
+        cat ? current.matched++ : current.unmatched++;
+
+        current.items.push({
+          code:     cat ? (cat.code || code) : code,
+          name:     cat ? cat.name : name,
+          qty:      qtyKg || 1,
+          unit:     'KG',
+          price:    price,
+          prodCost: prodCost,
+          totalLiq: totalLiq
+        });
+      }
+      if(current && current.items.length) nfBlocks.push(current);
+
+      if(!nfBlocks.length) {
+        toast('Nenhuma NF encontrada no relatório. Verifique o arquivo.', 'error');
+        return;
+      }
+
+      // Filtra duplicatas
+      const newBlocks  = nfBlocks.filter(b => !existingNFs.includes(b.number));
+      const dupBlocks  = nfBlocks.filter(b => existingNFs.includes(b.number));
+
+      showERPPreviewModal(newBlocks, dupBlocks);
+    } catch(err) {
+      console.error(err);
+      toast('Erro ao processar o relatório ERP. Verifique o arquivo.', 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function showERPPreviewModal(newBlocks, dupBlocks) {
+  const existing = document.getElementById('erp-preview-modal');
+  if(existing) existing.remove();
+
+  const total     = newBlocks.length + dupBlocks.length;
+  const totalItems = newBlocks.reduce((s, b) => s + b.items.length, 0);
+  const totalMatched = newBlocks.reduce((s, b) => s + b.matched, 0);
+  const totalUnmatched = newBlocks.reduce((s, b) => s + b.unmatched, 0);
+
+  let rowsHTML = newBlocks.map(b => `
+    <tr>
+      <td class="px-3 py-2 font-mono text-sm">${b.number}</td>
+      <td class="px-3 py-2 text-sm">${b.date}</td>
+      <td class="px-3 py-2 text-sm">${b.customer || '—'}</td>
+      <td class="px-3 py-2 text-center text-sm">${b.items.length}</td>
+      <td class="px-3 py-2 text-center text-sm text-green-600">${b.matched}</td>
+      <td class="px-3 py-2 text-center text-sm ${b.unmatched ? 'text-yellow-600' : 'text-gray-400'}">${b.unmatched}</td>
+    </tr>`).join('');
+
+  let dupHTML = dupBlocks.length ? `
+    <div class="mt-3 p-3 rounded" style="background:var(--warning-bg,#fffbeb);border:1px solid #fcd34d">
+      <p class="text-sm text-yellow-700"><i class="fas fa-exclamation-triangle mr-1"></i>
+        <strong>${dupBlocks.length}</strong> NF(s) já existem e serão ignoradas:
+        ${dupBlocks.map(b => `<span class="font-mono">#${b.number}</span>`).join(', ')}
+      </p>
+    </div>` : '';
+
+  const modal = document.createElement('div');
+  modal.id = 'erp-preview-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML = `
+    <div class="card" style="max-width:760px;width:100%;max-height:90vh;overflow:auto">
+      <div class="flex items-center gap-3 mb-4">
+        <i class="fas fa-file-excel text-green-600 text-2xl"></i>
+        <div>
+          <h3 class="font-bold text-lg">Importar Relatório ERP</h3>
+          <p class="text-sm text-gray-500">${total} NF(s) encontrada(s) · ${totalItems} itens · ${totalMatched} vinculados ao catálogo${totalUnmatched ? ` · ${totalUnmatched} sem correspondência` : ''}</p>
+        </div>
+      </div>
+      ${newBlocks.length ? `
+      <div style="overflow-x:auto">
+        <table class="data-table w-full mb-3">
+          <thead><tr>
+            <th class="px-3 py-2 text-left text-sm">NF</th>
+            <th class="px-3 py-2 text-left text-sm">Data</th>
+            <th class="px-3 py-2 text-left text-sm">Cliente</th>
+            <th class="px-3 py-2 text-center text-sm">Itens</th>
+            <th class="px-3 py-2 text-center text-sm">Vinculados</th>
+            <th class="px-3 py-2 text-center text-sm">Sem catálogo</th>
+          </tr></thead>
+          <tbody>${rowsHTML}</tbody>
+        </table>
+      </div>` : `<p class="text-center text-gray-500 py-4">Todas as NFs do relatório já foram importadas.</p>`}
+      ${dupHTML}
+      <div class="flex gap-3 justify-end mt-4">
+        <button class="btn btn-outline" onclick="document.getElementById('erp-preview-modal').remove()">Cancelar</button>
+        ${newBlocks.length ? `<button class="btn btn-primary" onclick="confirmERPImport()"><i class="fas fa-check mr-1"></i> Importar ${newBlocks.length} NF(s)</button>` : ''}
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+  window._erpPendingBlocks = newBlocks;
+}
+
+function confirmERPImport() {
+  const blocks = window._erpPendingBlocks || [];
+  if(!blocks.length) return;
+  let saved = 0;
+  blocks.forEach(b => {
+    const inv = {
+      id:       Date.now() + '_' + b.number + '_' + Math.random().toString(36).slice(2,6),
+      number:   b.number,
+      date:     b.date,
+      supplier: b.customer,
+      items:    b.items,
+      status:   'pendente',
+      createdAt: new Date().toISOString()
+    };
+    DB.save(K.invoices, inv);
+    saved++;
+  });
+  document.getElementById('erp-preview-modal').remove();
+  window._erpPendingBlocks = null;
+  renderInvoices();
+  toast(`${saved} NF(s) importada(s) com sucesso!`, 'success');
 }
 
 function openInvoiceModal(id) {
