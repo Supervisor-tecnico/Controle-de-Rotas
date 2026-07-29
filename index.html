@@ -1913,23 +1913,38 @@ function importERPReport(input) {
       const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+
+      // Debug: log primeiras 30 linhas para diagnóstico
+      console.log('[ERP] Total de linhas:', rows.length);
+      rows.slice(0, 40).forEach((r, i) => {
+        const nonEmpty = r.map((c,j) => c !== '' ? `[${j}]="${c}"` : null).filter(Boolean);
+        if(nonEmpty.length) console.log(`[ERP] linha ${i}: ${nonEmpty.join(' | ')}`);
+      });
+
       const catalog = DB.get(K.products);
       const existingNFs = DB.get(K.invoices).map(n => String(n.number));
 
       const nfBlocks = [];
       let current = null;
       let inProducts = false;
+      let colOffset = 0; // coluna base onde ficam os dados da NF
 
       for(let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const c0 = String(row[0]||'').trim();
 
-        // Detecta início de bloco NF
-        const nfMatch = c0.match(/NF:\s*(\d+)/);
-        if(nfMatch) {
-          if(current) nfBlocks.push(current);
-          const dateMatch = c0.match(/miss[aã]o:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
-          const nfDate = dateMatch ? `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}` : todayStr();
+        // Procura "NF:" em qualquer célula da linha
+        let nfCellIdx = -1, nfCellVal = '';
+        for(let j = 0; j < row.length; j++) {
+          const v = String(row[j]||'').trim();
+          if(/NF:\s*\d+/i.test(v)) { nfCellIdx = j; nfCellVal = v; break; }
+        }
+
+        if(nfCellIdx >= 0) {
+          if(current && current.items.length) nfBlocks.push(current);
+          colOffset = nfCellIdx;
+          const nfMatch  = nfCellVal.match(/NF:\s*(\d+)/i);
+          const dateMatch = nfCellVal.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          const nfDate   = dateMatch ? `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}` : todayStr();
           current = { number: nfMatch[1], date: nfDate, customer: '', items: [], matched: 0, unmatched: 0 };
           inProducts = false;
           continue;
@@ -1937,41 +1952,48 @@ function importERPReport(input) {
 
         if(!current) continue;
 
-        // Detecta linha de cliente
-        const clienteMatch = c0.match(/Cliente:\s*\d+\s*-\s*(.+?)\s*(?:-\s*CPF|$)/i);
-        if(clienteMatch) {
-          current.customer = clienteMatch[1].trim();
-          continue;
+        // Detecta cliente buscando em qualquer célula
+        let clienteFound = false;
+        for(let j = 0; j < row.length; j++) {
+          const v = String(row[j]||'').trim();
+          const cm = v.match(/Cliente:\s*\d+\s*-\s*(.+?)(?:\s*-\s*CPF|$)/i);
+          if(cm) { current.customer = cm[1].trim(); clienteFound = true; break; }
         }
+        if(clienteFound) continue;
 
-        // Detecta cabeçalho de produto (linha "PRODUTO | QTDE/PC | ...")
-        if(/PRODUTO/i.test(c0) && /QTDE/i.test(String(row[1]||''))) {
+        // Cabeçalho da tabela de produtos
+        const rowStr = row.map(c => String(c||'').toUpperCase()).join('|');
+        if(rowStr.includes('PRODUTO') && rowStr.includes('QTDE')) {
           inProducts = true;
           continue;
         }
 
         if(!inProducts) continue;
 
-        // Linha de subtotal: célula 0 vazia e col[2] numérica
-        if(!c0 && parseBRNumber(row[2]) > 0) {
-          inProducts = false;
+        // Célula principal (coluna do produto, relativa ao offset)
+        const c0 = String(row[colOffset]||'').trim();
+
+        // Linha de subtotal/total (célula principal vazia ou "Total")
+        if(!c0 || /^total/i.test(c0)) {
+          if(!c0) inProducts = false;
           continue;
         }
 
-        // Linha de produto: código começa com letras + hífen + dígitos (ex: QT-1234 ou QM-1234)
-        if(!/^[A-Z]{1,3}-\d+/i.test(c0)) continue;
+        // Linha de produto: código tipo "QT-1234", "QM-1234", ou qualquer código-hífen-número
+        if(!/^[A-Za-z]{1,4}-\d+/.test(c0)) continue;
 
         const dashIdx = c0.indexOf(' - ');
-        const code = dashIdx > -1 ? c0.substring(0, dashIdx).trim() : c0.split(/\s/)[0];
+        const code = dashIdx > -1 ? c0.substring(0, dashIdx).trim() : c0.split(/\s+/)[0];
         const name = dashIdx > -1 ? c0.substring(dashIdx + 3).trim() : c0;
 
-        const qtyKg  = parseBRNumber(row[2]); // QTDE/KG
-        const price  = parseBRNumber(row[3]); // VLR MÉDIO/KG
-        const totalLiq = parseBRNumber(row[5]); // TOTAL LIQ.
+        // Colunas de valores (relativas ao offset):
+        // col+1=QTDE/PC, col+2=QTDE/KG, col+3=VLR MÉDIO/KG, col+4=TOTAL BRT, col+5=TOTAL LIQ
+        const qtyKg   = parseBRNumber(row[colOffset + 2]);
+        const price    = parseBRNumber(row[colOffset + 3]);
+        const totalLiq = parseBRNumber(row[colOffset + 5]);
 
         if(qtyKg === 0 && price === 0) continue;
 
-        // Vincula ao catálogo
         let cat = catalog.find(p => p.code && p.code.toUpperCase() === code.toUpperCase());
         if(!cat) cat = catalog.find(p => p.name && name.length >= 6 && p.name.toLowerCase().includes(name.toLowerCase().substring(0,8)));
         const prodCost = cat ? (+cat.productionCost || 0) : 0;
@@ -1991,16 +2013,15 @@ function importERPReport(input) {
 
       if(!nfBlocks.length) {
         toast('Nenhuma NF encontrada no relatório. Verifique o arquivo.', 'error');
+        console.warn('[ERP] Padrão "NF: XXXX" não encontrado em nenhuma célula.');
         return;
       }
 
-      // Filtra duplicatas
-      const newBlocks  = nfBlocks.filter(b => !existingNFs.includes(b.number));
-      const dupBlocks  = nfBlocks.filter(b => existingNFs.includes(b.number));
-
+      const newBlocks = nfBlocks.filter(b => !existingNFs.includes(b.number));
+      const dupBlocks = nfBlocks.filter(b =>  existingNFs.includes(b.number));
       showERPPreviewModal(newBlocks, dupBlocks);
     } catch(err) {
-      console.error(err);
+      console.error('[ERP] Erro:', err);
       toast('Erro ao processar o relatório ERP. Verifique o arquivo.', 'error');
     }
   };
