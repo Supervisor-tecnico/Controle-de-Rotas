@@ -2002,16 +2002,18 @@ function importERPReport(input) {
         const code = dashIdx > -1 ? c0.substring(0, dashIdx).trim() : c0.split(/\s+/)[0];
         const name = dashIdx > -1 ? c0.substring(dashIdx + 3).trim() : c0;
 
-        // SheetJS lê QTDE e VLR ×100 e TOTAL ÷1000 em relação ao valor real do ERP
-        // Ex real: QTDE=90, VLR=20,27, TOTAL=1824,30 → SheetJS lê: 9000, 2027, 1,8243
-        const qtyRaw      = parseBRNumber(row[colOffset + 2]);
+        // TOTAL LIQ (col+5) e VLR MÉDIO/KG (col+3) têm escala consistente no SheetJS:
+        //   VLR real × 100 = SheetJS (ex: R$20,27 → 2027)
+        //   TOTAL real / 1000 = SheetJS (ex: R$1824,30 → 1,8243)
+        // QTDE/KG (col+2) tem escala INCONSISTENTE — derivamos qty a partir de total/price.
         const priceRaw    = parseBRNumber(row[colOffset + 3]);
         const totalLiqRaw = parseBRNumber(row[colOffset + 5]);
-        const qtyKg       = qtyRaw   / 100;    // corrige fator ×100 do SheetJS
-        const unitPrice   = priceRaw / 100;    // corrige fator ×100 do SheetJS
-        const totalLiq    = totalLiqRaw * 1000; // corrige fator ÷1000 do SheetJS
+        const unitPrice   = priceRaw    / 100;    // R$/kg real
+        const totalLiq    = totalLiqRaw * 1000;   // R$ real
+        // qty = totalLiq / unitPrice evita a coluna QTDE que tem fator imprevisível
+        const qtyKg = (unitPrice > 0) ? Math.round((totalLiq / unitPrice) * 1000) / 1000 : 0;
 
-        if(qtyKg === 0 && unitPrice === 0) continue;
+        if(totalLiq === 0 && unitPrice === 0) continue;
 
         let cat = catalog.find(p => p.code && p.code.toUpperCase() === code.toUpperCase());
         if(!cat) cat = catalog.find(p => p.name && name.length >= 6 && p.name.toLowerCase().includes(name.toLowerCase().substring(0,8)));
