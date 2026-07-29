@@ -322,6 +322,26 @@
             <div id="dash-cost-breakdown"><p class="text-gray-400 text-sm">Sem dados.</p></div>
           </div>
         </div>
+
+        <!-- BACKUP CARD - visível apenas para admin -->
+        <div id="dash-backup-card" class="card mt-4" style="display:none">
+          <div class="flex items-center justify-between flex-wrap gap-3">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg flex items-center justify-center" style="background:#1e3a5f15">
+                <i class="fas fa-database" style="color:#1e3a5f"></i>
+              </div>
+              <div>
+                <div class="font-semibold text-gray-800 text-sm">Backup & Restauração</div>
+                <div class="text-xs text-gray-500">Exporte ou importe todos os dados do sistema</div>
+              </div>
+            </div>
+            <div class="flex gap-2 flex-wrap">
+              <button class="btn btn-primary" style="font-size:13px;padding:7px 14px" onclick="exportBackup()"><i class="fas fa-download"></i> Exportar</button>
+              <button class="btn btn-outline" style="font-size:13px;padding:7px 14px" onclick="document.getElementById('dash-import-file').click()"><i class="fas fa-upload"></i> Importar</button>
+              <input type="file" id="dash-import-file" accept=".json" style="display:none" onchange="importBackup(this)">
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- VEHICLES -->
@@ -1293,6 +1313,7 @@ function showApp() {
   if(isAdmin){
     show(['nav-users']);
     show(['admin-section-label'],'block');
+    const bc=document.getElementById('dash-backup-card'); if(bc) bc.style.display='block';
   }
   // Operador: apenas Dashboard e Rotas (já visíveis por padrão)
   navigate('dashboard');
